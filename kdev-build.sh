@@ -104,7 +104,7 @@ if [ -d kos/lib/modules ]; then
     find kos -name "*.ko"
     ls -alh kos/lib/modules/
     mkdir -p "${WORKDIR}/release"
-    tar -zcvf "${WORKDIR}/release/kos-6.18.y.tar.gz" kos
+    tar -zcvf "${WORKDIR}/release/kos-${KVER}.tar.gz" kos
   fi
 fi
 
@@ -117,7 +117,7 @@ if [ -f vmlinux ]; then
   done
 
   if [ ${#DEBUGINFO_FILES[@]} -gt 0 ]; then
-    tar -zcvf "${WORKDIR}/release/kernel-debuginfo-6.18.y.tar.gz" "${DEBUGINFO_FILES[@]}"
+    tar -zcvf "${WORKDIR}/release/kernel-debuginfo-${KVER}.tar.gz" "${DEBUGINFO_FILES[@]}"
     echo "Kernel debuginfo archived: ${DEBUGINFO_FILES[*]}"
   else
     echo "No debuginfo files found to archive"
@@ -127,7 +127,7 @@ fi
 # --- 内核头文件打包 ---
 if [ -d kernel-headers ]; then
   mkdir -p "${WORKDIR}/release"
-  tar -zcvf "${WORKDIR}/release/kernel-headers-6.18.y.tar.gz" kernel-headers
+  tar -zcvf "${WORKDIR}/release/kernel-headers-${KVER}.tar.gz" kernel-headers
 fi
 
 
@@ -262,7 +262,7 @@ fi
 
 # 打包 kernel-devel
 cd "${WORKDIR}"
-tar -czf "${WORKDIR}/release/kernel-devel-6.18.y.tar.gz" kernel-devel
+tar -czf "${WORKDIR}/release/kernel-devel-${KVER}.tar.gz" kernel-devel
 
 # 展示最终产物列表
 echo ""
