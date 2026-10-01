@@ -29,8 +29,8 @@ make ARCH=arm64 \
   KBUILD_BUILD_USER="builder" \
   KBUILD_BUILD_HOST="kdevbuilder" \
   LOCALVERSION=-kdev \
-  dtbs \
-  -j$(nproc)
+  rockchip/rk3588-bdy-g98.dtb
+ls -alh arch/arm64/boot/dts/rockchip/rk3588-bdy-g98.dtb
 
 # 编译内核主镜像 (Image)，抑制未使用函数警告
 make ARCH=arm64 \
@@ -263,6 +263,10 @@ fi
 # 打包 kernel-devel
 cd "${WORKDIR}"
 tar -czf "${WORKDIR}/release/kernel-devel-${KVER}.tar.gz" kernel-devel
+
+# clean
+rm -f scripts/basic/fixdep
+rm -f scripts/mod/modpost
 
 # 展示最终产物列表
 echo ""
