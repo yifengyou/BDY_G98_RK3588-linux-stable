@@ -1264,16 +1264,16 @@ yt921x_marker_tfm(struct yt921x_marker *marker, u64 rate, u64 burst,
 
 static int
 yt921x_marker_tfm_police(struct yt921x_marker *marker,
-			 const struct flow_action_police *police,
+			 const struct flow_action_entry *act,
 			 unsigned int flags, struct yt921x_priv *priv, int port,
 			 struct netlink_ext_ack *extack)
 {
-	bool pkt_mode = !!police->rate_pkt_ps;
+	bool pkt_mode = !!act->police.rate_pkt_ps;
 	u64 burst;
 	u64 rate;
 
-	rate = pkt_mode ? police->rate_pkt_ps : police->rate_bytes_ps;
-	burst = pkt_mode ? police->burst_pkt : police->burst;
+	rate = pkt_mode ? act->police.rate_pkt_ps : act->police.rate_bytes_ps;
+	burst = pkt_mode ? act->police.burst_pkt : act->police.burst;
 	if (pkt_mode)
 		flags |= YT921X_MARKER_PKT_MODE;
 
@@ -1295,25 +1295,24 @@ yt921x_marker_tfm_shape(struct yt921x_marker *marker, u64 rate, u64 burst,
 }
 
 static int
-yt921x_police_validate(const struct flow_action_police *police,
-		       const struct flow_action *action,
+yt921x_police_validate(const struct flow_action *action,
 		       const struct flow_action_entry *act,
 		       struct netlink_ext_ack *extack)
 {
-	if (police->exceed.act_id != FLOW_ACTION_DROP) {
+	if (act->police.exceed.act_id != FLOW_ACTION_DROP) {
 		NL_SET_ERR_MSG_MOD(extack,
 				   "Offload not supported when exceed action is not drop");
 		return -EOPNOTSUPP;
 	}
 
-	if (police->notexceed.act_id != FLOW_ACTION_PIPE &&
-	    police->notexceed.act_id != FLOW_ACTION_ACCEPT) {
+	if (act->police.notexceed.act_id != FLOW_ACTION_PIPE &&
+	    act->police.notexceed.act_id != FLOW_ACTION_ACCEPT) {
 		NL_SET_ERR_MSG_MOD(extack,
 				   "Offload not supported when conform action is not pipe or ok");
 		return -EOPNOTSUPP;
 	}
 
-	if (police->notexceed.act_id == FLOW_ACTION_ACCEPT && action && act &&
+	if (act->police.notexceed.act_id == FLOW_ACTION_ACCEPT && action &&
 	    !flow_action_is_last_entry(action, act)) {
 		NL_SET_ERR_MSG_MOD(extack,
 				   "Offload not supported when conform action is ok, but action is not last");
@@ -1321,7 +1320,8 @@ yt921x_police_validate(const struct flow_action_police *police,
 	}
 
 	/* mtu defaults to unlimited but we got 2040 here, don't know why */
-	if (police->peakrate_bytes_ps || police->avrate || police->overhead) {
+	if (act->police.peakrate_bytes_ps || act->police.avrate ||
+	    act->police.overhead) {
 		NL_SET_ERR_MSG_MOD(extack,
 				   "Offload not supported when peakrate/avrate/overhead is configured");
 		return -EOPNOTSUPP;
@@ -1371,7 +1371,7 @@ static void yt921x_dsa_port_policer_del(struct dsa_switch *ds, int port)
 
 static int
 yt921x_dsa_port_policer_add(struct dsa_switch *ds, int port,
-			    const struct flow_action_police *police,
+			    const struct flow_action_police *policer,
 			    struct netlink_ext_ack *extack)
 {
 	struct yt921x_priv *priv = to_yt921x_priv(ds);
@@ -1379,11 +1379,17 @@ yt921x_dsa_port_policer_add(struct dsa_switch *ds, int port,
 	u32 ctrl;
 	int res;
 
-	res = yt921x_police_validate(police, NULL, NULL, extack);
-	if (res)
-		return res;
+	/* The DSA core only passes rate/burst in bytes; packet-per-second
+	 * policers (rate == 0 here) cannot be expressed and must be rejected
+	 * instead of programming a zero CIR.
+	 */
+	if (!policer->rate_bytes_ps)
+		return -EOPNOTSUPP;
 
-	res = yt921x_marker_tfm_police(&marker, police, 0, priv, port, extack);
+	res = yt921x_marker_tfm(&marker, policer->rate_bytes_ps,
+				policer->burst, 0, priv->meter_slot_ns,
+				YT921X_METER_CIR_MAX, YT921X_METER_CBS_MAX,
+				YT921X_METER_UNIT_MAX, priv, port, NULL);
 	if (res)
 		return res;
 
@@ -1405,7 +1411,8 @@ yt921x_dsa_port_setup_tc_tbf_port(struct dsa_switch *ds, int port,
 				  const struct tc_tbf_qopt_offload *qopt)
 {
 	struct yt921x_priv *priv = to_yt921x_priv(ds);
-	struct netlink_ext_ack *extack = qopt->extack;
+	/* struct tc_tbf_qopt_offload has no extack member in 6.18 */
+	struct netlink_ext_ack *extack = NULL;
 	u32 ctrls[2];
 	int res;
 
@@ -1666,7 +1673,7 @@ struct yt921x_acl_rule_ext {
 
 static int
 yt921x_acl_rule_ext_parse_flow_entries(struct yt921x_acl_rule_ext *ruleext,
-				       const struct flow_cls_offload *cls)
+				       struct flow_cls_offload *cls)
 {
 	const struct flow_rule *rule = flow_cls_offload_flow_rule(cls);
 	struct yt921x_acl_entry *entries = ruleext->r.entries;
@@ -2019,7 +2026,7 @@ err:
 
 static int
 yt921x_acl_rule_ext_parse_flow_action(struct yt921x_acl_rule_ext *ruleext,
-				      const struct flow_cls_offload *cls,
+				      struct flow_cls_offload *cls,
 				      struct yt921x_priv *priv, int port)
 {
 	const struct flow_rule *rule = flow_cls_offload_flow_rule(cls);
@@ -2093,8 +2100,6 @@ yt921x_acl_rule_ext_parse_flow_action(struct yt921x_acl_rule_ext *ruleext,
 			action[1] |= YT921X_ACL_ACTb_PRIO(act->priority);
 			break;
 		case FLOW_ACTION_POLICE: {
-			const struct flow_action_police *police = &act->police;
-
 			if (seen_police) {
 				action[0] &= ~YT921X_ACL_ACTa_METER_EN;
 
@@ -2103,12 +2108,11 @@ yt921x_acl_rule_ext_parse_flow_action(struct yt921x_acl_rule_ext *ruleext,
 			}
 			seen_police = true;
 
-			res = yt921x_police_validate(police, flow_action, act,
-						     extack);
+			res = yt921x_police_validate(flow_action, act, extack);
 			if (res)
 				return res;
 
-			res = yt921x_marker_tfm_police(&ruleext->marker, police,
+			res = yt921x_marker_tfm_police(&ruleext->marker, act,
 						       0, priv, port, extack);
 			if (res)
 				return res;
@@ -2141,7 +2145,7 @@ fallback:
 
 static int
 yt921x_acl_rule_ext_parse_flow(struct yt921x_acl_rule_ext *ruleext, int port,
-			       const struct flow_cls_offload *cls, bool ingress,
+			       struct flow_cls_offload *cls, bool ingress,
 			       struct yt921x_priv *priv)
 {
 	struct netlink_ext_ack *extack = cls->common.extack;
@@ -3598,6 +3602,22 @@ yt921x_bridge_join(struct yt921x_priv *priv, int port, u16 ports_mask)
 	return 0;
 }
 
+/* Local replacement for dsa_bridge_ports() from newer kernels, which is
+ * not available in 6.18.
+ */
+static u32 yt921x_dsa_bridge_ports(struct dsa_switch *ds,
+				   const struct net_device *bdev)
+{
+	struct dsa_port *dp;
+	u32 mask = 0;
+
+	dsa_switch_for_each_user_port(dp, ds)
+		if (dsa_port_offloads_bridge_dev(dp, bdev))
+			mask |= BIT(dp->index);
+
+	return mask;
+}
+
 static int
 yt921x_bridge_flags(struct yt921x_priv *priv, int port,
 		    struct switchdev_brport_flags flags)
@@ -3641,7 +3661,7 @@ yt921x_bridge_flags(struct yt921x_priv *priv, int port,
 		if (bdev) {
 			u32 ports_mask;
 
-			ports_mask = dsa_bridge_ports(ds, bdev);
+			ports_mask = yt921x_dsa_bridge_ports(ds, bdev);
 			ports_mask |= priv->cpu_ports_mask;
 			res = yt921x_bridge(priv, ports_mask);
 			if (res)
@@ -3713,7 +3733,7 @@ yt921x_dsa_port_bridge_join(struct dsa_switch *ds, int port,
 	if (dsa_is_cpu_port(ds, port))
 		return 0;
 
-	ports_mask = dsa_bridge_ports(ds, bridge.dev);
+	ports_mask = yt921x_dsa_bridge_ports(ds, bridge.dev);
 	ports_mask |= priv->cpu_ports_mask;
 
 	mutex_lock(&priv->reg_lock);
@@ -4145,7 +4165,43 @@ yt921x_port_config(struct yt921x_priv *priv, int port, unsigned int mode,
 			return res;
 
 		break;
-	/* add XMII support here */
+	/* XMII. Only RGMII is implemented for now, which is enough for
+	 * MAC-to-MAC links (e.g. CPU port wired to an RGMII host). MII/RMII
+	 * can be added later following the same pattern.
+	 */
+	case PHY_INTERFACE_MODE_RGMII:
+	case PHY_INTERFACE_MODE_RGMII_ID:
+	case PHY_INTERFACE_MODE_RGMII_RXID:
+	case PHY_INTERFACE_MODE_RGMII_TXID:
+		mask = YT921X_SERDES_CTRL_PORTn(port);
+		res = yt921x_reg_clear_bits(priv, YT921X_SERDES_CTRL, mask);
+		if (res)
+			return res;
+
+		mask = YT921X_XMII_CTRL_PORTn(port);
+		res = yt921x_reg_set_bits(priv, YT921X_XMII_CTRL, mask);
+		if (res)
+			return res;
+
+		ctrl = YT921X_XMII_MODE_RGMII | YT921X_XMII_EN;
+		if (interface == PHY_INTERFACE_MODE_RGMII_ID ||
+		    interface == PHY_INTERFACE_MODE_RGMII_TXID)
+			ctrl |= YT921X_XMII_RGMII_TX_DELAY_2NS;
+		if (interface == PHY_INTERFACE_MODE_RGMII_ID ||
+		    interface == PHY_INTERFACE_MODE_RGMII_RXID)
+			/* 13 * 150ps = 1.95ns, closest to the standard 2ns */
+			ctrl |= YT921X_XMII_RGMII_RX_DELAY_150PS(13);
+
+		mask = YT921X_XMII_MODE_M | YT921X_XMII_EN |
+		       YT921X_XMII_RGMII_TX_DELAY_2NS |
+		       YT921X_XMII_RGMII_TX_DELAY_150PS_M |
+		       YT921X_XMII_RGMII_RX_DELAY_150PS_M;
+		res = yt921x_reg_update_bits(priv, YT921X_XMIIn(port), mask,
+					     ctrl);
+		if (res)
+			return res;
+
+		break;
 	default:
 		return -EINVAL;
 	}
@@ -4255,11 +4311,14 @@ yt921x_dsa_phylink_get_caps(struct dsa_switch *ds, int port,
 		config->mac_capabilities |= MAC_2500FD;
 
 		/* XMII */
-
-		/* Not tested. To add support for XMII:
-		 *   - Add proper interface modes below
-		 *   - Handle them in yt921x_port_config()
-		 */
+		__set_bit(PHY_INTERFACE_MODE_RGMII,
+			  config->supported_interfaces);
+		__set_bit(PHY_INTERFACE_MODE_RGMII_ID,
+			  config->supported_interfaces);
+		__set_bit(PHY_INTERFACE_MODE_RGMII_RXID,
+			  config->supported_interfaces);
+		__set_bit(PHY_INTERFACE_MODE_RGMII_TXID,
+			  config->supported_interfaces);
 	}
 	/* no such port: empty supported_interfaces causes phylink to turn it
 	 * down

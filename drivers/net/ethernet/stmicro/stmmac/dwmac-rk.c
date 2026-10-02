@@ -1555,6 +1555,13 @@ static int rk_gmac_init(struct device *dev, void *bsp_priv)
 	return rk_gmac_powerup(bsp_priv);
 }
 
+static int rk_gmac_clks_config(void *bsp_priv_, bool enabled)
+{
+	struct rk_priv_data *bsp_priv = bsp_priv_;
+
+	return gmac_clk_enable(bsp_priv, enabled);
+}
+
 static void rk_gmac_exit(struct device *dev, void *bsp_priv_)
 {
 	struct stmmac_priv *priv = netdev_priv(dev_get_drvdata(dev));
@@ -1604,6 +1611,7 @@ static int rk_gmac_probe(struct platform_device *pdev)
 	plat_dat->exit = rk_gmac_exit;
 	plat_dat->suspend = rk_gmac_suspend;
 	plat_dat->resume = rk_gmac_resume;
+	plat_dat->clks_config = rk_gmac_clks_config;
 
 	plat_dat->bsp_priv = rk_gmac_setup(pdev, plat_dat, data);
 	if (IS_ERR(plat_dat->bsp_priv))
@@ -1641,7 +1649,7 @@ static struct platform_driver rk_gmac_dwmac_driver = {
 	.probe  = rk_gmac_probe,
 	.driver = {
 		.name           = "rk_gmac-dwmac",
-		.pm		= &stmmac_simple_pm_ops,
+		.pm		= &stmmac_pltfr_pm_ops,
 		.of_match_table = rk_gmac_dwmac_match,
 	},
 };
