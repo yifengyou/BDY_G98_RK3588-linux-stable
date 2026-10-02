@@ -302,6 +302,7 @@
 		interrupt-parent = <&gpio0>;
 		interrupts = <RK_PB2 IRQ_TYPE_LEVEL_LOW>;
 		wakeup-source;
+		status = "disabled";
 	};
 };
 
